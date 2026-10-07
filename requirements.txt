@@ -1,0 +1,7 @@
+# Install CPU-only PyTorch first (no NVIDIA GPU needed):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+requests
+beautifulsoup4
+sentence-transformers
+chromadb
+streamlit
