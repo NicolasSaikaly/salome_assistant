@@ -1,0 +1,26 @@
+{"question": "How do I create a group of faces?", "pages": ["creating_groups.html", "tui_grouping_elements.html"]}
+{"question": "How do I create a group on geometry with a Python script?", "pages": ["tui_grouping_elements.html"]}
+{"question": "Which 1D hypotheses give segments with a growing length?", "pages": ["1d_meshing_hypo.html"]}
+{"question": "How do I export my mesh to a MED or UNV file?", "pages": ["importing_exporting_meshes.html"]}
+{"question": "How can I check the aspect ratio of my triangles and quadrangles?", "pages": ["aspect_ratio.html", "about_quality_controls.html"]}
+{"question": "My mesh has several nodes at the same location, how do I fuse them into one?", "pages": ["merging_nodes.html", "double_nodes_control.html"]}
+{"question": "How do I find holes in my surface mesh, where face edges are not shared with another face?", "pages": ["free_borders.html", "free_edges.html"]}
+{"question": "How do I convert a linear mesh to quadratic elements?", "pages": ["convert_to_from_quadratic_mesh.html"]}
+{"question": "How do I split hexahedra into tetrahedra?", "pages": ["split_to_tetra.html"]}
+{"question": "How do I extrude 2D elements to build a 3D mesh?", "pages": ["extrusion.html"]}
+{"question": "How do I create a mesh by rotating 2D elements around an axis?", "pages": ["revolution.html"]}
+{"question": "How do I move or rotate a whole mesh?", "pages": ["translation.html", "rotation.html", "tui_transforming_meshes.html"]}
+{"question": "I want a finer mesh on one part of my geometry only, how do I do that?", "pages": ["constructing_submeshes.html"]}
+{"question": "How do I compute a mesh in parallel?", "pages": ["parallel_compute.html"]}
+{"question": "How do I combine two meshes into a single one?", "pages": ["building_compounds.html"]}
+{"question": "How do I improve the shape of my elements by moving the nodes?", "pages": ["smoothing.html"]}
+{"question": "How do I measure the minimum distance between two nodes?", "pages": ["measurements.html", "tui_measurements.html"]}
+{"question": "How can I see how many nodes and elements my mesh contains?", "pages": ["mesh_infos.html"]}
+{"question": "Which algorithm gives a structured hexahedral mesh of a box?", "pages": ["basic_meshing_algos.html", "quad_ijk_algo.html"]}
+{"question": "Some face normals point inward, how do I flip them so they all point outward?", "pages": ["reorient_faces.html", "changing_orientation_of_elements.html"]}
+{"question": "How do I select only the faces whose area is greater than a given value?", "pages": ["about_filters.html", "tui_filters.html", "selection_filter_library.html"]}
+{"question": "How do I look inside a 3D mesh by cutting it with a plane?", "pages": ["clipping.html", "cut_mesh_by_plane.html"]}
+{"question": "How do I write a Python script that creates and computes a mesh?", "pages": ["tui_creating_meshes.html", "smeshpy_interface.html", "define_mesh_by_script.html"]}
+{"question": "How do I add thin boundary layer cells along the walls for a CFD simulation?", "pages": ["additional_hypo.html"]}
+{"question": "How do I find which element contains a given point?", "pages": ["find_element_by_point.html"]}
+{"question": "How do I build a new group from the union or intersection of two groups?", "pages": ["using_operations_on_groups.html"]}
