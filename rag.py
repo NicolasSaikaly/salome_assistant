@@ -19,19 +19,26 @@ import requests
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
 # ---- Settings shared by index.py, rag.py and later the app ----
-DB_DIR = "chroma_db"
+# Embedding model, changeable without editing the code:
+#   EMBED_MODEL=BAAI/bge-base-en-v1.5 python index.py
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-base-en-v1.5")
+# One database per embedding model, so several models can be compared side by side
+DB_DIR = "chroma_db/" + EMBED_MODEL.replace("/", "__")
 COLLECTION = "smesh_docs"
-EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 # bge models work better when the *question* (not the documents) gets this prefix
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 TOP_K = 5
 
 # Reranking: fetch more candidates with embeddings (fast, approximate), then let a
 # cross-encoder re-read each (question, passage) pair and re-order them (slower, precise).
-# Turn it off to compare:  RERANK=0 python eval_retrieval.py
-RERANK = os.environ.get("RERANK", "1") != "0"
+# Off by default: it did not help with bge-base (see eval/RESULTS.md).
+# Turn it on to compare:  RERANK=1 python eval_retrieval.py
+RERANK = os.environ.get("RERANK", "0") != "0"
 RERANK_MODEL = os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-base")
-CANDIDATES = 20
+CANDIDATES = int(os.environ.get("CANDIDATES", "20"))
+# Diversity: at most this many chunks from the same page in the final top-k,
+# so one big page cannot fill all the slots.  MAX_PER_PAGE=0 disables the rule.
+MAX_PER_PAGE = int(os.environ.get("MAX_PER_PAGE", "1"))
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 # Change the model without editing the code:  LLM_MODEL=qwen2.5:7b python rag.py "..."
@@ -71,9 +78,13 @@ def get_reranker() -> CrossEncoder:
     return CrossEncoder(RERANK_MODEL)
 
 
-def retrieve(question: str, k: int = TOP_K):
-    """Return the k chunks most relevant to the question, best first."""
-    n = CANDIDATES if RERANK else k
+def retrieve(question: str, k: int = TOP_K, rerank: bool = None):
+    """Return the k chunks most relevant to the question, best first.
+
+    rerank=None follows the RERANK setting; False gives the raw embedding search.
+    """
+    rerank = RERANK if rerank is None else rerank
+    n = max(CANDIDATES, k) if rerank else k
     res = get_collection().query(query_embeddings=embed([question], is_query=True),
                                  n_results=n)
     hits = []
@@ -86,13 +97,28 @@ def retrieve(question: str, k: int = TOP_K):
             "score": round(1 - dist, 3),   # cosine distance -> similarity (1 = identical)
         })
 
-    if RERANK:
+    if rerank:
         # The cross-encoder reads question and passage together -> a relevance score
         scores = get_reranker().predict([(question, h["text"]) for h in hits])
         for hit, s in zip(hits, scores):
             hit["score"] = round(float(s), 2)   # relevance (higher = better, can be < 0)
         hits.sort(key=lambda h: h["score"], reverse=True)
-    return hits[:k]
+    return diversify(hits, k) if rerank else hits[:k]
+
+
+def diversify(hits, k):
+    """Keep the best-ranked hits, with at most MAX_PER_PAGE chunks per page."""
+    if MAX_PER_PAGE <= 0:
+        return hits[:k]
+    kept, per_page = [], {}
+    for hit in hits:
+        page = hit["url"].split("#")[0]
+        if per_page.get(page, 0) < MAX_PER_PAGE:
+            kept.append(hit)
+            per_page[page] = per_page.get(page, 0) + 1
+        if len(kept) == k:
+            break
+    return kept
 
 
 # ---------------------------------------------------------------------------
