@@ -10,6 +10,7 @@ From the terminal:
 
 import json
 import os
+import re
 import sys
 import time
 from functools import lru_cache
@@ -43,6 +44,34 @@ MAX_PER_PAGE = int(os.environ.get("MAX_PER_PAGE", "1"))
 OLLAMA_URL = "http://localhost:11434/api/chat"
 # Change the model without editing the code:  LLM_MODEL=qwen2.5:7b python rag.py "..."
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:3b")
+
+# Query rewriting before the search (needs Ollama, adds ~2-5 s per question on CPU).
+#   auto (default): only for follow-up questions and non-English questions.
+#                   On English questions it HURT retrieval (see eval/RESULTS.md).
+#   1: always   0: never        e.g.  REWRITE=1 python eval_retrieval.py
+REWRITE = os.environ.get("REWRITE", "auto")
+REWRITE_MODEL = os.environ.get("REWRITE_MODEL", "qwen2.5:3b")
+# NB: the examples below are deliberately NOT taken from eval/questions.jsonl,
+# otherwise the evaluation would be biased.
+REWRITE_PROMPT = """You turn a user's question about the SALOME Mesh module (SMESH)
+into a search query for its English reference documentation.
+Rules:
+- Write in English, even if the question is in another language.
+- Replace everyday words with the technical meshing terms a reference manual would use,
+  and add 2-3 likely synonyms or feature names.
+- If the question is a follow-up, use the previous conversation to make it self-contained.
+- Never invent function or method names: only use words from the question or common
+  meshing vocabulary.
+- Output ONLY the query, on one line, at most 25 words. Do not answer the question.
+
+Examples:
+Question: comment supprimer un groupe ?
+Query: delete remove group of mesh elements, deleting groups
+Question: how can I make my mesh show up in red?
+Query: change mesh display color, colors and size of elements, display properties
+Previous conversation: User: How do I delete some nodes? Assistant: Use Modification > Remove > Nodes...
+Question: and with a script?
+Query: remove delete nodes with a Python script"""
 SYSTEM_PROMPT = """You are an assistant for the SALOME Mesh module (SMESH).
 Answer the question using ONLY the documentation excerpts provided.
 Rules:
@@ -78,24 +107,51 @@ def get_reranker() -> CrossEncoder:
     return CrossEncoder(RERANK_MODEL)
 
 
-def retrieve(question: str, k: int = TOP_K, rerank: bool = None):
-    """Return the k chunks most relevant to the question, best first.
+def search(query: str, n: int):
+    """Raw embedding search: the n chunks closest to the query, best first."""
+    res = get_collection().query(query_embeddings=embed([query], is_query=True),
+                                 n_results=n)
+    return [{"text": doc, "title": meta["title"], "section": meta["section"],
+             "url": meta["url"],
+             "score": round(1 - dist, 3)}   # cosine distance -> similarity (1 = identical)
+            for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0],
+                                       res["distances"][0])]
 
-    rerank=None follows the RERANK setting; False gives the raw embedding search.
+
+def fuse(*ranked_lists, c: int = 60):
+    """Reciprocal Rank Fusion: merge several rankings into one.
+
+    Each chunk gets sum(1 / (c + rank)) over the lists it appears in, so a chunk
+    ranked well by both the original and the rewritten query comes first.
+    """
+    scores, by_key = {}, {}
+    for hits in ranked_lists:
+        for rank, hit in enumerate(hits, 1):
+            key = hit["text"]
+            scores[key] = scores.get(key, 0) + 1 / (c + rank)
+            by_key.setdefault(key, hit)
+    return [by_key[key] for key in sorted(scores, key=scores.get, reverse=True)]
+
+
+def retrieve_with_query(question: str, k: int = TOP_K, rerank: bool = None,
+                        rewrite: bool = None, history=None):
+    """Return (the k most relevant chunks, the search query actually used).
+
+    rerank / rewrite = None follow the RERANK / REWRITE settings.
+    history = previous (question, answer) pairs, used to rewrite follow-up questions.
     """
     rerank = RERANK if rerank is None else rerank
-    n = max(CANDIDATES, k) if rerank else k
-    res = get_collection().query(query_embeddings=embed([question], is_query=True),
-                                 n_results=n)
-    hits = []
-    for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0]):
-        hits.append({
-            "text": doc,
-            "title": meta["title"],
-            "section": meta["section"],
-            "url": meta["url"],
-            "score": round(1 - dist, 3),   # cosine distance -> similarity (1 = identical)
-        })
+    if rewrite is None:
+        rewrite = (REWRITE == "1" or
+                   (REWRITE == "auto" and (bool(history) or not looks_english(question))))
+    n = max(CANDIDATES, k) if (rerank or rewrite) else k
+
+    hits, query = search(question, n), question
+    if rewrite:
+        query = rewrite_query(question, history)
+        if query != question:
+            # Keep the original search too: if the rewrite goes wrong, we lose nothing
+            hits = fuse(hits, search(query, n))
 
     if rerank:
         # The cross-encoder reads question and passage together -> a relevance score
@@ -103,7 +159,59 @@ def retrieve(question: str, k: int = TOP_K, rerank: bool = None):
         for hit, s in zip(hits, scores):
             hit["score"] = round(float(s), 2)   # relevance (higher = better, can be < 0)
         hits.sort(key=lambda h: h["score"], reverse=True)
-    return diversify(hits, k) if rerank else hits[:k]
+        return diversify(hits, k), query
+    return hits[:k], query
+
+
+def retrieve(question: str, k: int = TOP_K, rerank: bool = None, rewrite: bool = None,
+             history=None):
+    """Return the k chunks most relevant to the question, best first."""
+    return retrieve_with_query(question, k, rerank, rewrite, history)[0]
+
+
+# ---------------------------------------------------------------------------
+# Query rewriting: the LLM turns the user's question into a good search query
+# ---------------------------------------------------------------------------
+
+FRENCH_WORDS = {"comment", "je", "mon", "ma", "mes", "le", "la", "les", "un", "une",
+                "des", "du", "de", "pour", "avec", "dans", "sur", "est", "quel", "quelle",
+                "faire", "peut", "puis", "maillage", "noeuds", "nœuds", "et", "ou", "en"}
+
+
+def looks_english(question: str) -> bool:
+    """Cheap language check: accents or several common French words -> not English."""
+    if re.search(r"[éèêàâùûçôîœ]", question.lower()):
+        return False
+    words = re.findall(r"[a-zœ]+", question.lower())
+    return sum(w in FRENCH_WORDS for w in words) < 2
+
+
+def rewrite_query(question: str, history=None, model: str = None) -> str:
+    """Rewrite a question into an English search query in reference-manual vocabulary.
+
+    Fixes three things at once: users' everyday wording vs. the doc's technical terms,
+    questions asked in French, and follow-ups ("and with Python?") that need the
+    previous exchange to make sense. Falls back to the original question on error.
+    """
+    context = ""
+    if history:
+        last = history[-2:]  # the last two exchanges are enough for follow-ups
+        context = "Previous conversation:\n" + "\n".join(
+            f"User: {q}\nAssistant: {a[:300]}" for q, a in last) + "\n\n"
+    payload = {
+        "model": model or REWRITE_MODEL,
+        "messages": [{"role": "system", "content": REWRITE_PROMPT},
+                     {"role": "user", "content": f"{context}Question: {question}"}],
+        "stream": False,
+        "options": {"temperature": 0, "num_predict": 60},
+    }
+    try:
+        resp = requests.post(OLLAMA_URL, json=payload, timeout=60)
+        resp.raise_for_status()
+        query = resp.json()["message"]["content"].strip().strip('"').splitlines()[0]
+        return query or question
+    except (requests.RequestException, KeyError, IndexError):
+        return question
 
 
 def diversify(hits, k):

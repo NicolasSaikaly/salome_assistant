@@ -2,7 +2,9 @@
 
 Eval set: 26 questions on the SALOME Mesh (SMESH) docs, each labelled with the
 page(s) that contain the answer (`eval/questions.jsonl`).
-Corpus: 330 HTML pages -> 761 chunks. Hardware: laptop CPU only (no GPU), 16 GB RAM.
+Corpus: SMESH HTML docs - first the online docs (330 pages -> 761 chunks), then the docs
+shipped with SALOME 9.16 (178 pages -> 796 chunks, same scores on config 6).
+Hardware: laptop CPU only (no GPU), 16 GB RAM.
 
 | # | Embedding model | Reranker | Candidates | hit@1 | hit@5 | MRR | Time / question |
 |---|---|---|---|---|---|---|---|
@@ -28,6 +30,26 @@ Configs 3-6 keep at most 1 chunk per page in the top 5 when reranking.
   because every correct page was already within the top 9 of the embedding search.
 - **Remaining failures** are vocabulary gaps: "combine two meshes" vs the doc's
   "Build Compound", "finer mesh on one part" vs "sub-mesh".
+
+## Query rewriting by the LLM (27 questions)
+
+A 27th question was added after a real failure in the app
+("How can I view the interior of a mesh?" -> `clipping.html`).
+
+| Config (bge-base, no rerank) | hit@1 | hit@5 | MRR | Time / question |
+|---|---|---|---|---|
+| Original question only | 74 % | **89 %** | **0.79** | 0.1 s |
+| + rewritten query (qwen2.5:3b), fused with RRF | 74 % | 78 % | 0.76 | 2.7 s |
+
+- **Rewriting hurt on English questions**: it fixed none of the failures and broke three.
+  The 3B model does not know SALOME's vocabulary (it rewrote "view the interior" as
+  "internal mesh visualization", not "clipping"), and the first prompt's examples biased
+  it towards API words ("smeshBuilder ... method", even an invented "AddLayer"), which
+  pulled the search towards API reference pages.
+- **Decision**: rewriting is now *automatic*, only for follow-up questions and non-English
+  (e.g. French) questions, where the original wording cannot work. Prompt fixed (no API
+  words in examples, "never invent function names"). The French case still needs its own
+  evaluation set.
 
 ## Caveats
 

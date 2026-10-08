@@ -24,3 +24,4 @@
 {"question": "How do I add thin boundary layer cells along the walls for a CFD simulation?", "pages": ["additional_hypo.html"]}
 {"question": "How do I find which element contains a given point?", "pages": ["find_element_by_point.html"]}
 {"question": "How do I build a new group from the union or intersection of two groups?", "pages": ["using_operations_on_groups.html"]}
+{"question": "How can I view the interior of a mesh?", "pages": ["clipping.html"]}

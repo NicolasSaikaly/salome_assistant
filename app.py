@@ -14,13 +14,6 @@ import rag
 
 st.set_page_config(page_title="SALOME Mesh Assistant", page_icon="🔷", layout="wide")
 
-EXAMPLES = [
-    "How do I create a group of faces?",
-    "How do I export my mesh to a MED file?",
-    "How can I check the aspect ratio of my elements?",
-    "How do I merge nodes that are at the same location with a Python script?",
-]
-
 
 # ---------------------------------------------------------------- loading
 @st.cache_resource(show_spinner="Loading the search index…")
@@ -59,6 +52,12 @@ with st.sidebar:
         model = None
         st.error("Ollama is not reachable. Start it with `ollama serve`.")
     k = st.slider("Passages given to the model", 3, 8, rag.TOP_K)
+    mode = st.radio("Rewrite question before searching",
+                    ["Auto", "Always", "Off"], horizontal=True,
+                    help="Auto: only for follow-up questions and questions not in English "
+                         "(e.g. French). The model rephrases them into an English search "
+                         "query. On English questions, rewriting did not help in our tests.")
+    rewrite = {"Auto": None, "Always": True, "Off": False}[mode]
     st.toggle("Show passage text in sources", key="show_text")
     st.divider()
     try:
@@ -90,30 +89,24 @@ for msg in st.session_state.messages:
         if msg.get("info"):
             st.caption(msg["info"])
 
-# Example questions on an empty conversation
-question = None
-examples_box = st.empty()
-if not st.session_state.messages:
-    with examples_box.container():
-        st.markdown("**Try an example:**")
-        cols = st.columns(2)
-        for i, ex in enumerate(EXAMPLES):
-            if cols[i % 2].button(ex, use_container_width=True):
-                question = ex
-
-question = st.chat_input("Ask about SALOME meshing…") or question
+question = st.chat_input("Ask about SALOME meshing…")
 
 if question:
-    examples_box.empty()  # hide the examples once the conversation starts
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
 
     with st.chat_message("assistant"):
         t0 = time.time()
+        # Previous (question, answer) pairs, so follow-ups like "and in Python?" work
+        msgs = st.session_state.messages[:-1]
+        history = [(q["content"], a["content"]) for q, a in zip(msgs[::2], msgs[1::2])]
         with st.spinner("Searching the documentation…"):
-            hits = rag.retrieve(question, k=k)
+            hits, query = rag.retrieve_with_query(question, k=k, rewrite=rewrite,
+                                                  history=history)
         t_search = time.time() - t0
+        if query != question:
+            st.caption(f"🔎 Searched for: *{query}*")
         show_sources(hits)
 
         if model is None:

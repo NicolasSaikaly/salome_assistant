@@ -1,0 +1,4 @@
+
+[server]
+# Do not scan installed libraries (avoids noisy torchvision warnings)
+fileWatcherType = "none"
