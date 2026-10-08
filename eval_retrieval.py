@@ -18,19 +18,21 @@ question takes a few more seconds.
 recall@20 is measured on the raw embedding search of the ORIGINAL question.
 
 Usage:  python eval_retrieval.py
+        QUESTIONS=eval/questions_fr.jsonl python eval_retrieval.py   (French set)
         REWRITE=1 python eval_retrieval.py     (force rewriting of every question)
         EMBED_MODEL=BAAI/bge-base-en-v1.5 python eval_retrieval.py
         RERANK=0 python eval_retrieval.py
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
 import rag
 from rag import CANDIDATES, retrieve, retrieve_with_query
 
-QUESTIONS_FILE = Path("eval/questions.jsonl")
+QUESTIONS_FILE = Path(os.environ.get("QUESTIONS", "eval/questions.jsonl"))
 K = 5
 
 
@@ -78,7 +80,7 @@ def main():
     setup = (f"rerank={rag.RERANK_MODEL} | max/page={rag.MAX_PER_PAGE or 'off'}"
              if rag.RERANK else "no rerank")
     setup += f" | rewrite={rag.REWRITE} ({rag.REWRITE_MODEL})"
-    print(f"\n[{rag.EMBED_MODEL} | {setup}]")
+    print(f"\n[{QUESTIONS_FILE.name} | {rag.EMBED_MODEL} | {setup}]")
     print(f"{n} questions | hit@1 = {hit1 / n:.0%} | hit@{K} = {hit5 / n:.0%} | "
           f"MRR = {rr_sum / n:.2f} | recall@{CANDIDATES} = {recall / n:.0%} | "
           f"{per_q:.1f}s/question")

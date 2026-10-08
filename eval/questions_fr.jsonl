@@ -1,0 +1,27 @@
+{"question": "Comment créer un groupe de faces ?", "pages": ["creating_groups.html", "tui_grouping_elements.html"]}
+{"question": "Comment créer un groupe sur la géométrie avec un script Python ?", "pages": ["tui_grouping_elements.html"]}
+{"question": "Quelles hypothèses 1D donnent des segments de longueur croissante ?", "pages": ["1d_meshing_hypo.html"]}
+{"question": "Comment exporter mon maillage au format MED ou UNV ?", "pages": ["importing_exporting_meshes.html"]}
+{"question": "Comment vérifier le rapport d'aspect de mes triangles et quadrangles ?", "pages": ["aspect_ratio.html", "about_quality_controls.html"]}
+{"question": "Mon maillage a plusieurs nœuds au même endroit, comment les fusionner en un seul ?", "pages": ["merging_nodes.html", "double_nodes_control.html"]}
+{"question": "Comment trouver des trous dans mon maillage surfacique, là où les arêtes ne sont pas partagées entre deux faces ?", "pages": ["free_borders.html", "free_edges.html"]}
+{"question": "Comment convertir un maillage linéaire en éléments quadratiques ?", "pages": ["convert_to_from_quadratic_mesh.html"]}
+{"question": "Comment découper des hexaèdres en tétraèdres ?", "pages": ["split_to_tetra.html"]}
+{"question": "Comment extruder des éléments 2D pour obtenir un maillage 3D ?", "pages": ["extrusion.html"]}
+{"question": "Comment créer un maillage en faisant tourner des éléments 2D autour d'un axe ?", "pages": ["revolution.html"]}
+{"question": "Comment déplacer ou tourner un maillage entier ?", "pages": ["translation.html", "rotation.html", "tui_transforming_meshes.html"]}
+{"question": "Je veux un maillage plus fin sur une partie de ma géométrie seulement, comment faire ?", "pages": ["constructing_submeshes.html"]}
+{"question": "Comment calculer un maillage en parallèle ?", "pages": ["parallel_compute.html"]}
+{"question": "Comment combiner deux maillages en un seul ?", "pages": ["building_compounds.html"]}
+{"question": "Comment améliorer la forme de mes éléments en déplaçant les nœuds ?", "pages": ["smoothing.html"]}
+{"question": "Comment mesurer la distance minimale entre deux nœuds ?", "pages": ["measurements.html", "tui_measurements.html"]}
+{"question": "Comment voir combien de nœuds et d'éléments contient mon maillage ?", "pages": ["mesh_infos.html"]}
+{"question": "Quel algorithme donne un maillage hexaédrique structuré d'une boîte ?", "pages": ["basic_meshing_algos.html", "quad_ijk_algo.html"]}
+{"question": "Certaines normales de faces pointent vers l'intérieur, comment les retourner pour qu'elles pointent toutes vers l'extérieur ?", "pages": ["reorient_faces.html", "changing_orientation_of_elements.html"]}
+{"question": "Comment sélectionner uniquement les faces dont l'aire dépasse une valeur donnée ?", "pages": ["about_filters.html", "tui_filters.html", "selection_filter_library.html"]}
+{"question": "Comment regarder à l'intérieur d'un maillage 3D en le coupant par un plan ?", "pages": ["clipping.html", "cut_mesh_by_plane.html"]}
+{"question": "Comment écrire un script Python qui crée et calcule un maillage ?", "pages": ["tui_creating_meshes.html", "smeshpy_interface.html", "define_mesh_by_script.html"]}
+{"question": "Comment ajouter de fines couches de cellules le long des parois pour une simulation CFD ?", "pages": ["additional_hypo.html"]}
+{"question": "Comment trouver quel élément contient un point donné ?", "pages": ["find_element_by_point.html"]}
+{"question": "Comment construire un nouveau groupe à partir de l'union ou de l'intersection de deux groupes ?", "pages": ["using_operations_on_groups.html"]}
+{"question": "Comment voir l'intérieur d'un maillage ?", "pages": ["clipping.html"]}

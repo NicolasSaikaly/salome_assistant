@@ -51,6 +51,23 @@ A 27th question was added after a real failure in the app
   words in examples, "never invent function names"). The French case still needs its own
   evaluation set.
 
+## French questions (27 questions translated, `eval/questions_fr.jsonl`)
+
+The embedding model is English-only and the docs are in English.
+
+| Config (bge-base, no rerank) | hit@1 | hit@5 | MRR | Time / question |
+|---|---|---|---|---|
+| French question as is | 30 % | 52 % | 0.37 | 0.1 s |
+| French question rewritten in English by qwen2.5:3b (auto mode) | **52 %** | **78 %** | **0.62** | 2.4 s |
+| *(reference: English questions)* | *74 %* | *89 %* | *0.79* | *0.1 s* |
+
+- **Rewriting pays off here**: +26 points of hit@5 (7 more questions answered), which
+  justifies the *auto* mode: rewrite French and follow-up questions, not English ones.
+- Without rewriting, French queries are pulled towards the few French pages shipped
+  with SALOME (`usage_outil.html`, `presentation_base.html`), whatever the topic.
+- Remaining gap vs English (78 % vs 89 %) comes from translation slips
+  ("rapport d'aspect" -> "aspect report") and the same vocabulary gaps as in English.
+
 ## Caveats
 
 26 questions is small: one question = ~4 points, so differences under ~8 points

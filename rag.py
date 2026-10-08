@@ -208,7 +208,9 @@ def rewrite_query(question: str, history=None, model: str = None) -> str:
     try:
         resp = requests.post(OLLAMA_URL, json=payload, timeout=60)
         resp.raise_for_status()
-        query = resp.json()["message"]["content"].strip().strip('"').splitlines()[0]
+        query = resp.json()["message"]["content"].strip().splitlines()[0]
+        # Small models sometimes echo the "Query:" label from the examples
+        query = re.sub(r"^\s*(query|requête)\s*:\s*", "", query, flags=re.I).strip().strip('"')
         return query or question
     except (requests.RequestException, KeyError, IndexError):
         return question
