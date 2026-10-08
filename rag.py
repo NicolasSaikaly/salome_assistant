@@ -140,10 +140,10 @@ def build_messages(question: str, hits):
             {"role": "user", "content": user_msg}]
 
 
-def generate(question: str, hits):
+def generate(question: str, hits, model: str = None):
     """Ask Ollama for an answer and yield it piece by piece (streaming)."""
     payload = {
-        "model": LLM_MODEL,
+        "model": model or LLM_MODEL,
         "messages": build_messages(question, hits),
         "stream": True,
         "options": {
@@ -160,6 +160,15 @@ def generate(question: str, hits):
             yield data.get("message", {}).get("content", "")
             if data.get("done"):
                 break
+
+
+def list_llm_models():
+    """Names of the models installed in Ollama (empty list if Ollama is not running)."""
+    try:
+        resp = requests.get(OLLAMA_URL.replace("/api/chat", "/api/tags"), timeout=3)
+        return sorted(m["name"] for m in resp.json().get("models", []))
+    except requests.RequestException:
+        return []
 
 
 def print_sources(hits):

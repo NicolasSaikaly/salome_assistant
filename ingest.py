@@ -9,12 +9,19 @@ Output: data/chunks.jsonl (one JSON object per chunk).
 """
 
 import json
+import os
 import re
 from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-RAW_DIR = Path("data/raw")
+# Where the HTML docs are. Two options:
+#  - default: the pages downloaded with wget into data/raw/ (path = URL)
+#  - a local SALOME install:  DOCS_DIR=~/salome/.../doc/salome/gui/SMESH python ingest.py
+#    (links in answers still point to the online docs, via BASE_URL)
+DOCS_DIR = os.environ.get("DOCS_DIR")
+RAW_DIR = Path(os.path.expanduser(DOCS_DIR)) if DOCS_DIR else Path("data/raw")
+BASE_URL = os.environ.get("BASE_URL", "https://docs.salome-platform.org/latest/gui/SMESH/")
 OUT_FILE = Path("data/chunks.jsonl")
 MAX_CHARS = 1500      # max size of a chunk
 MIN_CHARS = 80        # drop near-empty chunks
@@ -30,8 +37,13 @@ SKIP_DIRS = {"_sources", "_static", "_images", "_modules"}
 
 
 def page_url(path: Path) -> str:
-    """data/raw/docs.salome-platform.org/a/b.html -> https://docs.salome-platform.org/a/b.html"""
-    return "https://" + path.relative_to(RAW_DIR).as_posix()
+    """Online URL of a local page.
+
+    wget copy:      data/raw/docs.salome-platform.org/a/b.html -> https://docs.salome-platform.org/a/b.html
+    SALOME install: <DOCS_DIR>/b.html                         -> BASE_URL + b.html
+    """
+    rel = path.relative_to(RAW_DIR).as_posix()
+    return BASE_URL + rel if DOCS_DIR else "https://" + rel
 
 
 def extract_sections(html: str):
@@ -135,7 +147,10 @@ def split_long(text: str):
 def main():
     pages = [p for p in RAW_DIR.rglob("*.html")
              if p.name not in SKIP_NAMES and not SKIP_DIRS & set(p.parts)]
+    if not pages:
+        raise SystemExit(f"No HTML page found in {RAW_DIR} - check DOCS_DIR")
     n_chunks = 0
+    OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     with OUT_FILE.open("w", encoding="utf-8") as out:
         for path in sorted(pages):
             title, sections = extract_sections(path.read_text(encoding="utf-8", errors="ignore"))
