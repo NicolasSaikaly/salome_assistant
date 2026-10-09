@@ -1,4 +1,18 @@
+[browser]
+# Keep everything local: no usage statistics sent to Streamlit
+gatherUsageStats = false
+
+[client]
+# Hide the developer toolbar (Deploy button, menu)
+toolbarMode = "minimal"
 
 [server]
 # Do not scan installed libraries (avoids noisy torchvision warnings)
 fileWatcherType = "none"
+
+[theme]
+base = "light"
+primaryColor = "#2F5D8A"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F8"
+textColor = "#1D232B"

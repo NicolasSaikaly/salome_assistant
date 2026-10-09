@@ -68,6 +68,35 @@ The embedding model is English-only and the docs are in English.
 - Remaining gap vs English (78 % vs 89 %) comes from translation slips
   ("rapport d'aspect" -> "aspect report") and the same vocabulary gaps as in English.
 
+## Answer quality (`eval_answers.py`, first 8 questions)
+
+Automatic checks on the answers written by the LLM:
+*intro* = starts with a one-sentence answer; *full ex.* = points to the complete example;
+*no invented API* = every function called in the code exists in the SMESH docs.
+
+| LLM (CPU) | Intro | Full ex. | No invented API | Sourced API | Time / answer |
+|---|---|---|---|---|---|
+| qwen2.5:3b | 50 % | 100 % | 75 % | 88 % | 60 s |
+| **qwen2.5:7b (default)** | **100 %** | **100 %** | **100 %** | 88 % | 35 s |
+
+*Sourced API* = every function called also appears in the 5 passages given to the model
+(otherwise it comes from the model's own knowledge).
+
+- On a first run, the 3B model invented `FaceGroups`, `MergingNodes` (real: `MergeNodes`),
+  `FindHole` and `Add`. The 7B model invented none.
+- The first version of the check only compared names with the 5 passages given to the
+  model and flagged the 7B's `MergeNodes`, a real function that was simply not in those
+  passages. The check now separates *invented* (nowhere in the docs) from *not in the
+  passages* (real but not sourced).
+- Times vary with machine load: the 7B took 116 s/answer on a first run and 35 s on a
+  later one, after fixing needless model reloads between calls (see `rag.py`, NUM_CTX).
+- **Decision**: 7B by default (a wrong function costs more than a 1-minute wait), 3B
+  kept as the fast option and for query rewriting. The app shows a warning under any
+  answer whose code uses a function that exists nowhere in the docs.
+- Lesson learned on the way: a full example answer in the prompt was copied word for
+  word by the 3B model on an unrelated question. The prompt now only contains an empty
+  layout template.
+
 ## Caveats
 
 26 questions is small: one question = ~4 points, so differences under ~8 points

@@ -42,8 +42,15 @@ CANDIDATES = int(os.environ.get("CANDIDATES", "20"))
 MAX_PER_PAGE = int(os.environ.get("MAX_PER_PAGE", "1"))
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-# Change the model without editing the code:  LLM_MODEL=qwen2.5:7b python rag.py "..."
-LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:3b")
+# Ollama reloads a model whenever the context size changes between two calls, so every
+# call uses the same NUM_CTX. KEEP_ALIVE keeps the model in memory between questions
+# (the default unloads it after 5 minutes, and reloading takes many seconds on CPU).
+NUM_CTX = 8192
+KEEP_ALIVE = "30m"
+# Default 7B: on 8 test questions it invented no function, the 3B invented 4 (see
+# eval/RESULTS.md); the 3B is twice as fast. Change it without editing the code:
+#   LLM_MODEL=qwen2.5:3b python rag.py "..."
+LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b")
 
 # Query rewriting before the search (needs Ollama, adds ~2-5 s per question on CPU).
 #   auto (default): only for follow-up questions and non-English questions.
@@ -74,12 +81,35 @@ Question: and with a script?
 Query: remove delete nodes with a Python script"""
 SYSTEM_PROMPT = """You are an assistant for the SALOME Mesh module (SMESH).
 Answer the question using ONLY the documentation excerpts provided.
+
 Rules:
-- Cite the excerpts you use with their number, like [1] or [2][3].
-- If the question is about scripting, give a short Python example based on the excerpts
-  (smeshBuilder API). Never invent functions that do not appear in the excerpts.
+- Start with ONE sentence that directly answers the question, naming the GUI menu and
+  the Python method found in the excerpts (method name only, no arguments).
+  No longer introduction and no closing summary.
+- Citations like [1] or [2][3] go at the END of a sentence, never at the start of a line.
+- GUI: a numbered list with only the steps needed to do the task (at most 6). Skip
+  warnings, optional settings and side notes.
+- Python: only the 1 to 5 lines that do what was asked. Name the mesh variable `mesh`
+  (excerpts often call it tetra, quadra, Mesh_1...), use simple literal values, and drop
+  helper code (imports, temporary files, geometry, Compute) unless asked.
+- Never describe code that you did not show.
+- Copy function names and arguments exactly as they appear in the excerpts.
+  Never invent functions or arguments that do not appear in the excerpts.
 - If the excerpts do not contain the answer, say so clearly instead of guessing.
-- Be concise and practical."""
+
+Layout (replace each <...> with content taken from the excerpts; omit a section if the
+excerpts do not cover it):
+<one sentence answering the question> [n]
+
+**In the GUI**
+1. <step>
+2. <step>
+
+**In Python**
+```python
+<1 to 5 lines>
+```
+Full example: [n]"""
 
 
 @lru_cache(maxsize=1)
@@ -143,7 +173,8 @@ def retrieve_with_query(question: str, k: int = TOP_K, rerank: bool = None,
     rerank = RERANK if rerank is None else rerank
     if rewrite is None:
         rewrite = (REWRITE == "1" or
-                   (REWRITE == "auto" and (bool(history) or not looks_english(question))))
+                   (REWRITE == "auto" and ((bool(history) and is_follow_up(question))
+                                            or not looks_english(question))))
     n = max(CANDIDATES, k) if (rerank or rewrite) else k
 
     hits, query = search(question, n), question
@@ -186,6 +217,24 @@ def looks_english(question: str) -> bool:
     return sum(w in FRENCH_WORDS for w in words) < 2
 
 
+FOLLOW_UP_STARTS = ("and ", "what about", "how about", "same ", "also ", "then ",
+                    "et ", "pareil", "même ", "aussi ", "ensuite")
+FOLLOW_UP_WORDS = {"it", "this", "that", "these", "those", "them", "same", "previous",
+                   "ça", "cela", "celui", "celle", "ceux", "même", "précédent"}
+
+
+def is_follow_up(question: str) -> bool:
+    """Does the question only make sense with the previous exchange?
+
+    "and in Python?", "how do I do that with a script?" -> yes.
+    "How do I split hexahedra into tetrahedra?" -> no, it stands on its own.
+    """
+    q = question.lower().strip()
+    words = re.findall(r"[a-zçéèêàâùûôîœ]+", q)
+    return (len(words) <= 4 or q.startswith(FOLLOW_UP_STARTS)
+            or any(w in FOLLOW_UP_WORDS for w in words))
+
+
 def rewrite_query(question: str, history=None, model: str = None) -> str:
     """Rewrite a question into an English search query in reference-manual vocabulary.
 
@@ -203,7 +252,8 @@ def rewrite_query(question: str, history=None, model: str = None) -> str:
         "messages": [{"role": "system", "content": REWRITE_PROMPT},
                      {"role": "user", "content": f"{context}Question: {question}"}],
         "stream": False,
-        "options": {"temperature": 0, "num_predict": 60},
+        "options": {"temperature": 0, "num_predict": 60, "num_ctx": NUM_CTX},
+        "keep_alive": KEEP_ALIVE,
     }
     try:
         resp = requests.post(OLLAMA_URL, json=payload, timeout=60)
@@ -242,12 +292,19 @@ def build_messages(question: str, hits):
     # right next to the question, at the end of the prompt.
     user_msg = (f"Documentation excerpts:\n\n{sources}\n\n"
                 f"Question: {question}\n\n"
-                "Answer using ONLY the excerpts above. Cite them like [1] after each claim. "
-                "For code, copy the exact calls and arguments shown in the excerpts "
-                "instead of writing new ones. If the excerpts describe both a GUI way "
-                "and a Python way, give both briefly.")
+                "Answer using ONLY the excerpts above, citing them like [1] at the end "
+                "of sentences. If the excerpts describe both a GUI way and a Python way, "
+                "give both briefly. For Python, show only the few lines that answer the "
+                "question, using `mesh` as the mesh variable, and point to the full example "
+                "instead of copying it.\n\n"
+                "Follow the layout from the instructions: first one sentence that answers "
+                "THIS question with the real menu and method names from the excerpts above, "
+                "then the **In the GUI** and **In Python** sections, then \"Full example: [n]\".")
     return [{"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_msg}]
+
+
+LAST_STATS = {}  # timing of the last answer, filled by generate()
 
 
 def generate(question: str, hits, model: str = None):
@@ -258,8 +315,10 @@ def generate(question: str, hits, model: str = None):
         "stream": True,
         "options": {
             "temperature": 0.1,  # low = factual, sticks to the sources
-            "num_ctx": 8192,     # context window big enough for 5 chunks + answer
+            "num_predict": 800,  # hard cap on answer length (tokens)
+            "num_ctx": NUM_CTX,  # context window big enough for 5 chunks + answer
         },
+        "keep_alive": KEEP_ALIVE,
     }
     with requests.post(OLLAMA_URL, json=payload, stream=True, timeout=300) as resp:
         resp.raise_for_status()
@@ -269,7 +328,56 @@ def generate(question: str, hits, model: str = None):
             data = json.loads(line)
             yield data.get("message", {}).get("content", "")
             if data.get("done"):
+                # Ollama reports where the time went (durations in nanoseconds)
+                LAST_STATS.clear()
+                LAST_STATS.update({
+                    "load_s": data.get("load_duration", 0) / 1e9,
+                    "read_s": data.get("prompt_eval_duration", 0) / 1e9,
+                    "write_s": data.get("eval_duration", 0) / 1e9,
+                    "prompt_tokens": data.get("prompt_eval_count", 0),
+                    "answer_tokens": data.get("eval_count", 0),
+                })
                 break
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: detect functions in the generated code that the docs never mention
+# ---------------------------------------------------------------------------
+
+PY_BUILTINS = {"print", "len", "range", "list", "dict", "set", "str", "int", "float",
+               "open", "isinstance", "enumerate", "zip", "sorted", "min", "max", "sum",
+               "abs", "type", "tuple", "bool"}
+
+
+def code_blocks(answer: str):
+    return re.findall(r"```(?:python)?\n(.*?)```", answer, re.S)
+
+
+def called_names(answer: str):
+    """Functions/methods called in the answer's code blocks: foo(...) or x.foo(...)."""
+    return {n for code in code_blocks(answer)
+            for n in re.findall(r"\b([A-Za-z_]\w*)\s*\(", code)} - PY_BUILTINS
+
+
+@lru_cache(maxsize=1)
+def corpus_names():
+    """Every identifier that appears anywhere in the indexed documentation."""
+    docs = get_collection().get(include=["documents"])["documents"]
+    return set(re.findall(r"\b[A-Za-z_]\w*\b", " ".join(docs)))
+
+
+def invented_calls(answer: str, hits=None):
+    """Called names that appear NOWHERE in the documentation: almost surely invented
+    (e.g. `MergingNodes` instead of the real `MergeNodes`). Checks names, not arguments."""
+    return sorted(n for n in called_names(answer) if n not in corpus_names())
+
+
+def ungrounded_calls(answer: str, hits):
+    """Called names that exist in the docs but not in the passages given to the model:
+    probably correct (from the model's own knowledge), but not backed by the sources."""
+    passages = " ".join(h["text"] for h in hits)
+    return sorted(n for n in called_names(answer)
+                  if n in corpus_names() and not re.search(rf"\b{re.escape(n)}\b", passages))
 
 
 def list_llm_models():
