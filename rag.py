@@ -1,11 +1,7 @@
-"""Core of the assistant: retrieval (step 2b) + generation (step 3).
+"""Retrieval and answer generation.
 
-    retrieve(question)        -> the doc chunks closest to the question
-    generate(question, hits)  -> the LLM answer, written from those chunks only
-
-From the terminal:
     python rag.py "How do I create a group of faces?"
-    python rag.py --search "How do I create a group of faces?"   (retrieval only)
+    python rag.py --search "How do I create a group of faces?"   # passages only
 """
 
 import json
@@ -19,47 +15,37 @@ import chromadb
 import requests
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
-# ---- Settings shared by index.py, rag.py and later the app ----
-# Embedding model, changeable without editing the code:
-#   EMBED_MODEL=BAAI/bge-base-en-v1.5 python index.py
+# Most settings can be overridden with environment variables (EMBED_MODEL, RERANK, ...)
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-base-en-v1.5")
-# One database per embedding model, so several models can be compared side by side
+# one index per embedding model, so models can be compared without re-indexing
 DB_DIR = "chroma_db/" + EMBED_MODEL.replace("/", "__")
 COLLECTION = "smesh_docs"
-# bge models work better when the *question* (not the documents) gets this prefix
+# bge models expect this prefix on queries (not on documents)
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 TOP_K = 5
 
-# Reranking: fetch more candidates with embeddings (fast, approximate), then let a
-# cross-encoder re-read each (question, passage) pair and re-order them (slower, precise).
-# Off by default: it did not help with bge-base (see eval/RESULTS.md).
-# Turn it on to compare:  RERANK=1 python eval_retrieval.py
+# Cross-encoder reranking of the top CANDIDATES. Off by default: it hurt with bge-base
+# (eval/RESULTS.md).
 RERANK = os.environ.get("RERANK", "0") != "0"
 RERANK_MODEL = os.environ.get("RERANK_MODEL", "BAAI/bge-reranker-base")
 CANDIDATES = int(os.environ.get("CANDIDATES", "20"))
-# Diversity: at most this many chunks from the same page in the final top-k,
-# so one big page cannot fill all the slots.  MAX_PER_PAGE=0 disables the rule.
+# max chunks per page in the final top-k when reranking (0 = no limit)
 MAX_PER_PAGE = int(os.environ.get("MAX_PER_PAGE", "1"))
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
-# Ollama reloads a model whenever the context size changes between two calls, so every
-# call uses the same NUM_CTX. KEEP_ALIVE keeps the model in memory between questions
-# (the default unloads it after 5 minutes, and reloading takes many seconds on CPU).
+# Same num_ctx for every call: Ollama reloads the model when it changes.
+# keep_alive avoids the 5-minute unload (reloading is slow on CPU).
 NUM_CTX = 8192
 KEEP_ALIVE = "30m"
-# Default 7B: on 8 test questions it invented no function, the 3B invented 4 (see
-# eval/RESULTS.md); the 3B is twice as fast. Change it without editing the code:
-#   LLM_MODEL=qwen2.5:3b python rag.py "..."
+# 7B by default: it follows the answer format and invented no API call on the test set,
+# unlike the 3B (eval/RESULTS.md).
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b")
 
-# Query rewriting before the search (needs Ollama, adds ~2-5 s per question on CPU).
-#   auto (default): only for follow-up questions and non-English questions.
-#                   On English questions it HURT retrieval (see eval/RESULTS.md).
-#   1: always   0: never        e.g.  REWRITE=1 python eval_retrieval.py
+# LLM query rewriting before the search: "auto" (follow-ups and non-English questions
+# only, since it hurt on English questions), "1" (always) or "0" (never).
 REWRITE = os.environ.get("REWRITE", "auto")
 REWRITE_MODEL = os.environ.get("REWRITE_MODEL", "qwen2.5:3b")
-# NB: the examples below are deliberately NOT taken from eval/questions.jsonl,
-# otherwise the evaluation would be biased.
+# The examples below are not taken from eval/questions.jsonl, to keep the eval fair.
 REWRITE_PROMPT = """You turn a user's question about the SALOME Mesh module (SMESH)
 into a search query for its English reference documentation.
 Rules:
@@ -114,7 +100,7 @@ Full example: [n]"""
 
 @lru_cache(maxsize=1)
 def get_model() -> SentenceTransformer:
-    """Load the embedding model once (it takes a few seconds)."""
+    """Loaded once and cached."""
     return SentenceTransformer(EMBED_MODEL)
 
 
@@ -125,7 +111,7 @@ def get_collection():
 
 
 def embed(texts, is_query=False):
-    """Turn texts into normalized vectors (so cosine similarity = dot product)."""
+    """Normalized embeddings (cosine similarity = dot product)."""
     if is_query:
         texts = [QUERY_PREFIX + t for t in texts]
     return get_model().encode(texts, normalize_embeddings=True,
@@ -200,9 +186,22 @@ def retrieve(question: str, k: int = TOP_K, rerank: bool = None, rewrite: bool =
     return retrieve_with_query(question, k, rerank, rewrite, history)[0]
 
 
-# ---------------------------------------------------------------------------
-# Query rewriting: the LLM turns the user's question into a good search query
-# ---------------------------------------------------------------------------
+def diversify(hits, k):
+    """Keep the best-ranked hits, with at most MAX_PER_PAGE chunks per page."""
+    if MAX_PER_PAGE <= 0:
+        return hits[:k]
+    kept, per_page = [], {}
+    for hit in hits:
+        page = hit["url"].split("#")[0]
+        if per_page.get(page, 0) < MAX_PER_PAGE:
+            kept.append(hit)
+            per_page[page] = per_page.get(page, 0) + 1
+        if len(kept) == k:
+            break
+    return kept
+
+
+# --- query rewriting -------------------------------------------------------
 
 FRENCH_WORDS = {"comment", "je", "mon", "ma", "mes", "le", "la", "les", "un", "une",
                 "des", "du", "de", "pour", "avec", "dans", "sur", "est", "quel", "quelle",
@@ -210,7 +209,7 @@ FRENCH_WORDS = {"comment", "je", "mon", "ma", "mes", "le", "la", "les", "un", "u
 
 
 def looks_english(question: str) -> bool:
-    """Cheap language check: accents or several common French words -> not English."""
+    """Rough check: accents or several common French words mean "not English"."""
     if re.search(r"[éèêàâùûçôîœ]", question.lower()):
         return False
     words = re.findall(r"[a-zœ]+", question.lower())
@@ -266,30 +265,12 @@ def rewrite_query(question: str, history=None, model: str = None) -> str:
         return question
 
 
-def diversify(hits, k):
-    """Keep the best-ranked hits, with at most MAX_PER_PAGE chunks per page."""
-    if MAX_PER_PAGE <= 0:
-        return hits[:k]
-    kept, per_page = [], {}
-    for hit in hits:
-        page = hit["url"].split("#")[0]
-        if per_page.get(page, 0) < MAX_PER_PAGE:
-            kept.append(hit)
-            per_page[page] = per_page.get(page, 0) + 1
-        if len(kept) == k:
-            break
-    return kept
-
-
-# ---------------------------------------------------------------------------
-# Step 3: generation - the LLM writes an answer from the retrieved chunks
-# ---------------------------------------------------------------------------
+# --- answer generation -----------------------------------------------------
 
 def build_messages(question: str, hits):
     """Build the chat messages sent to the LLM: rules + numbered sources + question."""
     sources = "\n\n".join(f"[{i}] {h['text']}" for i, h in enumerate(hits, 1))
-    # Small models follow instructions better when they are repeated
-    # right next to the question, at the end of the prompt.
+    # Repeated at the end on purpose: the 3B model ignored rules given only up front
     user_msg = (f"Documentation excerpts:\n\n{sources}\n\n"
                 f"Question: {question}\n\n"
                 "Answer using ONLY the excerpts above, citing them like [1] at the end "
@@ -314,9 +295,9 @@ def generate(question: str, hits, model: str = None):
         "messages": build_messages(question, hits),
         "stream": True,
         "options": {
-            "temperature": 0.1,  # low = factual, sticks to the sources
-            "num_predict": 800,  # hard cap on answer length (tokens)
-            "num_ctx": NUM_CTX,  # context window big enough for 5 chunks + answer
+            "temperature": 0.1,
+            "num_predict": 800,
+            "num_ctx": NUM_CTX,
         },
         "keep_alive": KEEP_ALIVE,
     }
@@ -328,7 +309,7 @@ def generate(question: str, hits, model: str = None):
             data = json.loads(line)
             yield data.get("message", {}).get("content", "")
             if data.get("done"):
-                # Ollama reports where the time went (durations in nanoseconds)
+                # durations are in nanoseconds
                 LAST_STATS.clear()
                 LAST_STATS.update({
                     "load_s": data.get("load_duration", 0) / 1e9,
@@ -340,9 +321,7 @@ def generate(question: str, hits, model: str = None):
                 break
 
 
-# ---------------------------------------------------------------------------
-# Guardrail: detect functions in the generated code that the docs never mention
-# ---------------------------------------------------------------------------
+# --- API call check on generated code --------------------------------------
 
 PY_BUILTINS = {"print", "len", "range", "list", "dict", "set", "str", "int", "float",
                "open", "isinstance", "enumerate", "zip", "sorted", "min", "max", "sum",
@@ -367,14 +346,13 @@ def corpus_names():
 
 
 def invented_calls(answer: str, hits=None):
-    """Called names that appear NOWHERE in the documentation: almost surely invented
-    (e.g. `MergingNodes` instead of the real `MergeNodes`). Checks names, not arguments."""
+    """Called names that appear nowhere in the docs, i.e. most likely invented
+    (e.g. `MergingNodes` for `MergeNodes`). Only names are checked, not arguments."""
     return sorted(n for n in called_names(answer) if n not in corpus_names())
 
 
 def ungrounded_calls(answer: str, hits):
-    """Called names that exist in the docs but not in the passages given to the model:
-    probably correct (from the model's own knowledge), but not backed by the sources."""
+    """Called names that exist in the docs but not in the passages given to the model."""
     passages = " ".join(h["text"] for h in hits)
     return sorted(n for n in called_names(answer)
                   if n in corpus_names() and not re.search(rf"\b{re.escape(n)}\b", passages))
@@ -396,8 +374,6 @@ def print_sources(hits):
 
 
 if __name__ == "__main__":
-    # python rag.py "question"            -> sources + answer written by the LLM
-    # python rag.py --search "question"   -> retrieval only (shows the passages found)
     args = sys.argv[1:]
     search_only = bool(args) and args[0] == "--search"
     if search_only:

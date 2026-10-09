@@ -1,11 +1,6 @@
-"""Step 2b - Compute an embedding for every chunk and store it in Chroma.
+"""Embed the chunks from data/chunks.jsonl and store them in Chroma.
 
-An embedding is a vector (384 numbers here) that represents the meaning
-of a text: two texts about the same thing get close vectors. Chroma is
-the database that stores those vectors and finds the nearest ones fast.
-
-Input:  data/chunks.jsonl  (made by ingest.py)
-Output: chroma_db/         (the vector database, rebuilt from scratch each run)
+The collection is rebuilt from scratch on each run, in chroma_db/<embedding model>/.
 """
 
 import json
@@ -25,7 +20,6 @@ def main():
     print(f"{len(records)} chunks to index")
 
     client = chromadb.PersistentClient(path=DB_DIR)
-    # Start from an empty collection so re-running never creates duplicates
     if COLLECTION in [c.name for c in client.list_collections()]:
         client.delete_collection(COLLECTION)
     collection = client.create_collection(COLLECTION, metadata={"hnsw:space": "cosine"})

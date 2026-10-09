@@ -1,21 +1,7 @@
-"""Step 5a - Measure retrieval quality on a set of questions with known answers.
+"""Retrieval metrics on a labelled question set (eval/questions.jsonl).
 
-For each question in eval/questions.jsonl we know which doc page(s) contain
-the answer. We check where that page shows up in the retrieved results:
-
-    hit@1     = % of questions where a correct page is ranked first
-    hit@5     = % of questions where a correct page is in the top 5
-                (what matters most: the LLM reads these 5 passages)
-    MRR       = mean of 1/rank of the first correct page (0 if absent) -> 1.0 is perfect
-    recall@20 = % of questions where a correct page is among the 20 candidates
-                of the embedding search. The reranker can only re-order these 20:
-                if the page is not there, only a better first stage can fix it.
-
-With REWRITE=auto (default), English questions are not rewritten: no LLM is
-involved and this takes seconds. With REWRITE=1, Ollama must be running and each
-question takes a few more seconds.
-
-recall@20 is measured on the raw embedding search of the ORIGINAL question.
+hit@1, hit@5 and MRR on the final top 5; recall@20 on the raw embedding search of the
+original question (what a reranker can work with).
 
 Usage:  python eval_retrieval.py
         QUESTIONS=eval/questions_fr.jsonl python eval_retrieval.py   (French set)

@@ -17,7 +17,6 @@ st.set_page_config(page_title="SALOME Mesh Assistant", page_icon="◆", layout="
                    initial_sidebar_state="expanded")
 
 # ---------------------------------------------------------------- look & feel
-# Palette: white page, steel-grey surfaces, one steel-blue accent for links/citations.
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -233,7 +232,7 @@ if question:
         st.markdown(question)
 
     with st.chat_message("assistant"):
-        # Previous (question, answer) pairs, so follow-ups like "and in Python?" work
+        # previous (question, answer) pairs, for follow-up questions
         msgs = st.session_state.messages[:-1]
         history = [(q["content"], a["content"]) for q, a in zip(msgs[::2], msgs[1::2])]
         t0 = time.time()

@@ -1,17 +1,11 @@
-"""Check the ANSWERS written by the LLM (eval_retrieval.py only checks the search).
+"""Automatic checks on generated answers (run it after every prompt change).
 
-For a handful of questions, this script runs the full pipeline (search + answer) and
-runs three automatic checks on each answer:
+  intro     starts with a sentence, not with a heading or a list
+  full_ex   points to the full example when it shows code
+  api       every function called in the code exists somewhere in the docs
+  grounded  ... and also in the passages given to the model
 
-  intro      the answer starts with a sentence, not directly with a heading or a list
-  full_ex    the answer ends with "Full example: [n]" when it shows Python code
-  api        every function/method called in the code exists somewhere in the docs.
-             A name that appears nowhere was invented (hallucinated).
-  grounded   every function called also appears in the passages given to the model
-             (otherwise it comes from the model's own knowledge: maybe right, not sourced)
-
-All answers are also saved to eval/answers/<model>_<date>.md so you can read them.
-Use it after every prompt change, so a change is judged on several questions, not one.
+Answers are saved to eval/answers/<model>_<date>.md.
 
 Usage:  python eval_answers.py                  (8 first questions, default model)
         LLM_MODEL=qwen2.5:7b python eval_answers.py
@@ -41,8 +35,8 @@ def check(answer: str, hits):
     return {
         "intro": bool(first_line) and not first_line.startswith(("#", "**In", "1.", "-", "```")),
         "full_ex": (not codes) or bool(re.search(r"Full example:?\s*\[\d+\]", answer)),
-        "api": not invented,          # no function that exists nowhere in the docs
-        "grounded": not ungrounded,   # every function also appears in the given passages
+        "api": not invented,
+        "grounded": not ungrounded,
         "invented": invented,
         "ungrounded": ungrounded,
     }

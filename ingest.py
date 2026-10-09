@@ -1,11 +1,10 @@
-"""Step 2a - Turn the downloaded SALOME HTML docs into text chunks.
+"""Split the SMESH HTML documentation into text chunks.
 
-Reads every HTML page under data/raw/, keeps only the main content,
-splits it by section (h1/h2/h3), then cuts long sections into chunks
-of at most MAX_CHARS characters. Code examples are kept intact
-as ```python blocks so the assistant can quote them.
+Keeps the main content of each page, splits it by section (h1/h2/h3) and cuts long
+sections into chunks of at most MAX_CHARS characters. Code examples are never split,
+so the assistant can quote them whole.
 
-Output: data/chunks.jsonl (one JSON object per chunk).
+Output: data/chunks.jsonl
 """
 
 import json
@@ -15,23 +14,20 @@ from pathlib import Path
 
 from bs4 import BeautifulSoup
 
-# Where the HTML docs are. Two options:
-#  - default: the pages downloaded with wget into data/raw/ (path = URL)
-#  - a local SALOME install:  DOCS_DIR=~/salome/.../doc/salome/gui/SMESH python ingest.py
-#    (links in answers still point to the online docs, via BASE_URL)
+# Docs location: data/raw/ (wget mirror, path = URL) or a SALOME install via DOCS_DIR.
+# Links always point to the online docs (BASE_URL).
 DOCS_DIR = os.environ.get("DOCS_DIR")
 RAW_DIR = Path(os.path.expanduser(DOCS_DIR)) if DOCS_DIR else Path("data/raw")
 BASE_URL = os.environ.get("BASE_URL", "https://docs.salome-platform.org/latest/gui/SMESH/")
 OUT_FILE = Path("data/chunks.jsonl")
-MAX_CHARS = 1500      # max size of a chunk
-MIN_CHARS = 80        # drop near-empty chunks
-HEADING_MARK = "§§H§§"   # temporary marker for headings
-CODE_MARK = "§§C§§"      # temporary marker for code examples
-# Elements that start a new line (everything else, like links, stays inline)
+MAX_CHARS = 1500
+MIN_CHARS = 80                  # smaller chunks are dropped
+HEADING_MARK = "@@HEADING@@"    # placeholders used while flattening the HTML
+CODE_MARK = "@@CODE@@"
+# Tags that start a new line; everything else (links, spans) stays inline
 BLOCK_TAGS = ["p", "li", "dt", "dd", "tr", "table", "ul", "ol", "dl",
               "div", "section", "blockquote", "br", "figure", "caption"]
 
-# Sphinx pages that are not real content
 SKIP_NAMES = {"genindex.html", "search.html", "py-modindex.html"}
 SKIP_DIRS = {"_sources", "_static", "_images", "_modules"}
 
@@ -58,34 +54,29 @@ def extract_sections(html: str):
     if main is None:
         return title, []
 
-    # Remove noise: scripts, nav, the "¶" permalinks
     for tag in main.select("script, style, nav, a.headerlink"):
         tag.decompose()
 
-    # 1. Set code examples aside (their spaces and line breaks matter)
+    # Code blocks are set aside so whitespace normalisation doesn't touch them
     codes = []
     for pre in main.find_all("pre"):
         codes.append(pre.get_text().rstrip())
         pre.replace_with(f"{CODE_MARK}{len(codes) - 1}{CODE_MARK}")
 
-    # 2. In normal text, line breaks in the HTML source mean nothing:
-    #    "how a\n<a>Wire Discretization</a>\nshould" -> "how a Wire Discretization should"
+    # Line breaks inside the HTML source are not real breaks
     for s in list(main.find_all(string=True)):
         s.replace_with(re.sub(r"\s+", " ", s))
 
-    # 3. Real paragraph breaks only around block elements
     for tag in main.find_all(BLOCK_TAGS):
         tag.insert_before("\n")
         tag.insert_after("\n")
 
-    # 4. Put a marker before each heading so we can split on it later
     for h in main.find_all(["h1", "h2", "h3"]):
         parent = h.find_parent(["section", "div"])
         anchor = h.get("id") or (parent.get("id") if parent else "") or ""
         h.replace_with(f"\n{HEADING_MARK}{anchor}|{h.get_text(' ', strip=True)}\n")
 
     text = main.get_text()
-    # 5. Put the code examples back as ```python blocks
     text = re.sub(f"{CODE_MARK}(\\d+){CODE_MARK}",
                   lambda m: f"\n```python\n{codes[int(m.group(1))]}\n```\n", text)
     sections = []

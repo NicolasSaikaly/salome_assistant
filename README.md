@@ -1,186 +1,186 @@
 # SALOME Mesh Assistant
 
-A local, open-source **RAG assistant** that answers questions about meshing in
-[SALOME](https://www.salome-platform.org/) (the SMESH module) — in the GUI or with a
-Python script — and **cites the documentation pages it used**.
+A local assistant that answers questions about meshing in
+[SALOME](https://www.salome-platform.org/) (SMESH module), in the GUI or in Python,
+and links each answer to the documentation it comes from.
 
-Everything runs on a laptop CPU: no GPU, no API key, no data leaving the machine.
-Every design choice below was made by **measuring it** on an evaluation set.
+It is a retrieval-augmented generation (RAG) pipeline that runs entirely on a laptop
+CPU: no GPU, no API key, and questions never leave the machine.
 
-![Screenshot of the assistant](docs/screenshot.png)
+Why this project: I work on SALOME meshing plugins during my apprenticeship at CEA,
+and the documentation is large enough that finding the right page, or the right Python
+call for a script, takes real time. An assistant that answers from the docs and shows
+its sources would help me in my daily work, and could later help other engineers who
+script SALOME, if it proves reliable enough. It is also how I chose to learn to build
+and, above all, evaluate an LLM application properly.
 
-> **Status:** working prototype, actively developed — see [Roadmap](#roadmap).
+![Screenshot](docs/screenshot.png)
 
----
+Work in progress, see the [roadmap](#roadmap).
 
-## What it does
+## Features
 
-- Ask a question in plain English **or French**: *"How do I merge nodes that are at the
-  same location?"*, *"Comment exporter mon maillage au format MED ?"*
-- The assistant searches the SMESH documentation, then a local LLM writes an answer
-  **grounded only in the passages found**, with clickable citations `[1]`, `[2]`
-  pointing to the exact doc section.
-- Follow-up questions work (*"and with a Python script?"*).
-- Choose the model in the UI: `qwen2.5:7b` (default, more accurate) or `qwen2.5:3b`
-  (twice as fast).
-- **Guardrail**: every function used in a generated code snippet is checked against the
-  documentation; if one exists nowhere in the docs, a warning is shown under the answer.
+- Questions in English or French, e.g. "How do I merge nodes that are at the same
+  location?" or "Comment exporter mon maillage au format MED ?"
+- Answers are written by a local LLM from the retrieved passages only, with numbered
+  citations that open the exact section of the docs.
+- Follow-up questions ("and with a Python script?").
+- Code snippets are checked: if a function used in the answer exists nowhere in the
+  SMESH docs, a warning is shown under the answer.
+- Model choice in the UI: `qwen2.5:7b` (default) or `qwen2.5:3b` (faster, less reliable).
 
 ## How it works
 
 ```mermaid
 flowchart LR
     subgraph Indexing["Indexing (once)"]
-        D[SMESH HTML docs<br/>178 pages] --> C[ingest.py<br/>clean + split by section<br/>796 chunks]
-        C --> E[index.py<br/>bge-base-en-v1.5 embeddings]
-        E --> DB[(Chroma<br/>vector DB)]
+        D[SMESH HTML docs<br/>178 pages] --> C[ingest.py<br/>split by section<br/>796 chunks]
+        C --> E[index.py<br/>bge-base-en-v1.5]
+        E --> DB[(Chroma)]
     end
-    subgraph Answering["Answering a question"]
+    subgraph Answering["Answering"]
         Q[Question] --> R{French or<br/>follow-up?}
         R -- yes --> W[LLM rewrites it as an<br/>English search query]
         R -- no --> S
-        W --> S[Semantic search<br/>+ rank fusion]
+        W --> S[Embedding search]
         DB --> S
         S --> T[Top 5 passages]
-        T --> G[Local LLM via Ollama<br/>answer + citations]
-        G --> UI[Streamlit chat]
+        T --> G[LLM via Ollama<br/>answer + citations]
+        G --> UI[Streamlit UI]
     end
 ```
 
-| Step | Choice | Why |
+| Component | Choice | Reason |
 |---|---|---|
-| Chunking | Split by HTML section, max 1,500 chars, code examples never cut | Keeps each Python example whole so it can be quoted |
-| Embeddings | `BAAI/bge-base-en-v1.5` | Best retrieval on the eval set (see below) |
-| Vector store | Chroma (local, persistent) | Simple, no server |
-| Reranking | Implemented, **off by default** | Measured: it hurt with bge-base |
-| Query rewriting | Only for French / follow-up questions | Measured: helps French, hurts English |
-| LLM | `qwen2.5:7b` via Ollama (3B optional), temperature 0.1 | Measured: the 7B invented no function on the test set, the 3B did in 2 answers out of 8 |
+| Chunking | By HTML section, max 1,500 characters, code blocks never split | Python examples stay whole |
+| Embeddings | `BAAI/bge-base-en-v1.5` | Best retrieval scores on the eval set |
+| Vector store | Chroma, local | No server to run |
+| Reranking | Implemented, off by default | Made results worse with bge-base |
+| Query rewriting | French and follow-up questions only | Helps in French, hurts in English |
+| LLM | `qwen2.5:7b` through Ollama, temperature 0.1 | Fewer invented API calls than the 3B |
 
 ## Results
 
-Retrieval is evaluated on **27 hand-written questions** (plus the same 27 in French),
-each labelled with the doc page(s) that contain the answer.
-Metrics: **hit@5** = the right page is among the 5 passages given to the LLM;
-**MRR** = how high it is ranked (1.0 = always first). Full log: [`eval/RESULTS.md`](eval/RESULTS.md).
+All numbers come from [`eval/RESULTS.md`](eval/RESULTS.md), which also lists the
+configurations that did not work.
+
+**Retrieval.** 27 questions, each labelled with the doc page(s) containing the answer.
+hit@5 is the share of questions where a correct page is among the 5 passages given to
+the LLM; MRR rewards ranking it first.
 
 | Configuration | hit@1 | hit@5 | MRR | Search time |
 |---|---|---|---|---|
-| bge-small (baseline) | 65 % | 81 % | 0.72 | < 0.1 s |
+| bge-small | 65 % | 81 % | 0.72 | < 0.1 s |
 | bge-small + cross-encoder reranker | 65 % | 85 % | 0.74 | 13.3 s |
 | bge-base + cross-encoder reranker | 62 % | 92 % | 0.75 | 14.6 s |
-| **bge-base, no reranker (default)** | **77 %** | **92 %** | **0.82** | **0.1 s** |
+| bge-base (default) | 77 % | 92 % | 0.82 | 0.1 s |
 
-*(26-question set for this table; 27 questions after adding a real failure: 74 % / 89 % / 0.79.)*
+This table was made with the first 26 questions. With the 27th (added after a bad
+answer in the UI), the default configuration gives 74 % / 89 % / 0.79.
 
-**French questions** (embedding model and docs are English-only):
+**French questions.** The same 27 questions, translated. The embedding model and the
+docs are English-only, so the question is first rewritten in English by the LLM.
 
 | | hit@1 | hit@5 | MRR |
 |---|---|---|---|
 | French question as is | 30 % | 52 % | 0.37 |
-| **Rewritten in English by the LLM (default)** | **52 %** | **78 %** | **0.62** |
+| Rewritten in English (default) | 52 % | 78 % | 0.62 |
 
-**Answer quality** (`eval_answers.py`, 8 questions, automatic checks):
+**Answers.** `eval_answers.py` runs 8 questions end to end and checks the answers
+automatically (format, and whether every called function exists in the docs).
 
 | LLM (CPU) | Starts with a direct answer | No invented API call | Time / answer |
 |---|---|---|---|
 | qwen2.5:3b | 50 % | 75 % | ~1 min |
-| **qwen2.5:7b (default)** | **100 %** | **100 %** | ~35 s to 2 min |
+| qwen2.5:7b (default) | 100 % | 100 % | 35 s to 2 min |
 
-### What I learned
+### Notes
 
-- **A stronger embedding model beat reranking.** The cross-encoder helped the small
-  model but *hurt* the bigger one while being ~150× slower: it favoured large API
-  reference pages over the user-guide page that answers the question.
-- **Measure before optimizing.** Adding *recall@20* showed most failures were ranking
-  problems, not missing candidates — which pointed to the right fix.
-- **LLM query rewriting is not free.** On English questions the 3B model's rewrites
-  broke three answers (it doesn't know SALOME's vocabulary, and my first prompt nudged
-  it towards invented API names). On French questions it adds +26 points. Hence the
-  *auto* mode.
-- **Small models copy examples.** A full example answer in the prompt was reproduced
-  word for word by the 3B model on an unrelated question; the prompt now uses an empty
-  layout template, and every prompt change is checked on several questions.
-- **Check the checker.** My first hallucination test flagged a real function
-  (`MergeNodes`) because it only looked at the 5 passages given to the model.
-- **Real failures become test cases.** A bad answer in the UI ("view the interior of
-  a mesh" → clipping) was added to the eval set.
-- **26 questions is small** (1 question ≈ 4 points): differences under ~8 points are
-  not conclusive.
+- The cross-encoder reranker helped bge-small but hurt bge-base, while being about 150
+  times slower. It tended to push the large API reference pages above the user-guide
+  page that actually answers the question.
+- Measuring recall@20 early showed that most misses were ranking problems, not missing
+  candidates, which changed what I tried next.
+- LLM query rewriting broke three English answers: the 3B model does not know SALOME's
+  vocabulary ("view the interior" never became "clipping"). In French it adds 26 points
+  of hit@5, hence the automatic mode.
+- A complete example answer in the prompt was copied word for word by the 3B model on an
+  unrelated question. The prompt now only has an empty layout, and prompt changes are
+  tested on several questions with `eval_answers.py`.
+- My first hallucination check only compared function names with the 5 passages and
+  flagged `MergeNodes`, which is a real function. It now checks against the whole docs.
+- 27 questions is a small set: one question is about 4 points, so small differences
+  are not meaningful.
 
-## Quick start
+## Running it
 
-Tested on Ubuntu 22.04 (WSL2), Python 3.10, 16 GB RAM, CPU only.
+Tested on Ubuntu 22.04 (WSL2), Python 3.10, 16 GB RAM, no GPU.
 
 ```bash
 git clone https://github.com/NicolasSaikaly/salome_assistant.git
 cd salome_assistant
 python3 -m venv .venv && source .venv/bin/activate
-pip install torch --index-url https://download.pytorch.org/whl/cpu   # CPU-only PyTorch
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 
-# Local LLM
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5:7b        # answers
-ollama pull qwen2.5:3b        # query rewriting (French / follow-up questions)
+ollama pull qwen2.5:3b        # query rewriting
 ```
 
-**Documentation source:** the HTML docs shipped with SALOME (download the native
-package from salome-platform.org and extract it):
+The documentation is read from a SALOME installation (native package from
+salome-platform.org):
 
 ```bash
 DOCS_DIR=~/salome/SALOME-9.16.0-native-UB22.04-SRC/BINARIES-UB22.04/SMESH/share/doc/salome/gui/SMESH \
-  python ingest.py            # HTML -> data/chunks.jsonl
-python index.py               # embeddings -> chroma_db/  (~6 min on CPU)
+  python ingest.py            # -> data/chunks.jsonl
+python index.py               # -> chroma_db/ (about 6 min on CPU)
 python eval_retrieval.py      # retrieval metrics
-python eval_answers.py        # answer checks on 8 questions (needs Ollama)
-streamlit run app.py          # web UI on http://localhost:8501
+python eval_answers.py        # answer checks (needs Ollama)
+streamlit run app.py          # http://localhost:8501
 ```
 
-Command line: `python rag.py "How do I create a group of faces?"`
-(`--search` to see the retrieved passages only).
+From the command line: `python rag.py "How do I create a group of faces?"`
+(add `--search` to only print the retrieved passages).
 
-Most settings can be changed without editing code, e.g.
-`EMBED_MODEL=BAAI/bge-small-en-v1.5`, `RERANK=1`, `REWRITE=1|0|auto`,
-`LLM_MODEL=qwen2.5:7b`, `QUESTIONS=eval/questions_fr.jsonl`.
+Settings can be changed through environment variables, for example `LLM_MODEL=qwen2.5:3b`,
+`EMBED_MODEL=BAAI/bge-small-en-v1.5`, `RERANK=1`, `REWRITE=0` or
+`QUESTIONS=eval/questions_fr.jsonl`.
 
-## Project structure
+## Files
 
 ```
-ingest.py            HTML docs -> clean text chunks (sections, code blocks kept intact)
+ingest.py            HTML docs -> chunks
 index.py             chunks -> embeddings -> Chroma
-rag.py               retrieval (search, rank fusion, optional reranking, query rewriting)
-                     + generation (prompt, streaming answer from Ollama)
-app.py               Streamlit chat UI with clickable citations
-eval_retrieval.py    hit@1, hit@5, MRR, recall@20 on a question set
-eval_answers.py      automatic checks on generated answers (format, invented API calls)
-eval/                questions.jsonl, questions_fr.jsonl, RESULTS.md
+rag.py               search, query rewriting, answer generation, API call check
+app.py               Streamlit UI
+eval_retrieval.py    hit@1, hit@5, MRR, recall@20
+eval_answers.py      checks on generated answers
+eval/                question sets, results, saved answers
 ```
 
 ## Roadmap
 
-- [x] Measure answer quality: detect invented API calls in generated code.
-- [ ] Check the **arguments** of API calls too, not only the function names.
-- [ ] **Run the generated scripts** in SALOME and report the share that executes.
-- [ ] Hybrid search (BM25 + embeddings) for exact API names like `MergeNodes`.
-- [ ] Larger eval set (50+ questions, more scripting questions).
-- [ ] Other SALOME modules (GEOM, SHAPER) and a panel inside the SALOME GUI.
-- [ ] Unit tests and a CI job that fails if retrieval metrics drop.
+- [x] Detect invented API calls in generated code
+- [ ] Check the arguments of API calls, not only the names
+- [ ] Run the generated scripts in SALOME and count how many execute
+- [ ] Hybrid search (BM25 + embeddings) for exact names like `MergeNodes`
+- [ ] Smaller chunks, to cut the time the LLM spends reading the passages
+- [ ] A larger question set, with more scripting questions
+- [ ] Other SALOME modules (GEOM, SHAPER)
+- [ ] Unit tests and a CI job that fails if retrieval metrics drop
 
 ## Limitations
 
-- Knows only the public SMESH documentation — nothing about other modules or
-  in-house plugins.
-- A 3B model can still answer off-topic or invent details when the right passage is
-  not retrieved; the citations let the user check.
-- CPU-only: an answer takes from ~35 s to ~2 min depending on the machine load, most
-  of it spent reading the 5 passages.
+- Only the public SMESH documentation is indexed.
+- When the right passage is not retrieved, the model can still answer off-topic; the
+  citations are there so the user can check.
+- On CPU an answer takes from about 35 s to 2 min, mostly spent reading the passages.
 
-## About
+## Author
 
-Built by **Nicolas Saikaly**, engineering student in Computer Science & Applied
-Mathematics (Polytech Paris-Saclay) and software engineering apprentice working on
-SALOME meshing plugins at CEA Paris-Saclay.
-This is a personal project, built on my own machine from **public documentation only**.
+Nicolas Saikaly, engineering student in Computer Science and Applied Mathematics at
+Polytech Paris-Saclay, apprentice software engineer on SALOME at CEA Paris-Saclay.
+Personal project, built with public documentation only.
 
-[LinkedIn](https://www.linkedin.com/in/nicolas-saikaly) ·
-[GitHub](https://github.com/NicolasSaikaly)
+[LinkedIn](https://www.linkedin.com/in/nicolas-saikaly) / [GitHub](https://github.com/NicolasSaikaly)

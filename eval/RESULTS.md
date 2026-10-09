@@ -1,10 +1,12 @@
-# Retrieval evaluation results
+# Evaluation log
 
-Eval set: 26 questions on the SALOME Mesh (SMESH) docs, each labelled with the
-page(s) that contain the answer (`eval/questions.jsonl`).
-Corpus: SMESH HTML docs - first the online docs (330 pages -> 761 chunks), then the docs
-shipped with SALOME 9.16 (178 pages -> 796 chunks, same scores on config 6).
-Hardware: laptop CPU only (no GPU), 16 GB RAM.
+Question sets: `questions.jsonl` (English) and `questions_fr.jsonl` (same questions in
+French), each question labelled with the doc page(s) that contain the answer.
+Corpus: SMESH HTML docs, first the online version (330 pages, 761 chunks), then the
+docs shipped with SALOME 9.16 (178 pages, 796 chunks; config 6 gives the same scores).
+Hardware: laptop CPU, 16 GB RAM, no GPU.
+
+## 1. Embeddings and reranking (26 questions)
 
 | # | Embedding model | Reranker | Candidates | hit@1 | hit@5 | MRR | Time / question |
 |---|---|---|---|---|---|---|---|
@@ -13,93 +15,78 @@ Hardware: laptop CPU only (no GPU), 16 GB RAM.
 | 3 | bge-small-en-v1.5 | bge-reranker-base | 20 | 65 % | 85 % | 0.74 | 13.3 s |
 | 4 | bge-small-en-v1.5 | bge-reranker-base | 10 | 65 % | 85 % | 0.74 | 6.7 s |
 | 5 | bge-base-en-v1.5 | bge-reranker-base | 20 | 62 % | 92 % | 0.75 | 14.6 s |
-| **6** | **bge-base-en-v1.5** | **none** | - | **77 %** | **92 %** | **0.82** | **0.1 s** |
+| 6 | bge-base-en-v1.5 | none | - | 77 % | 92 % | 0.82 | 0.1 s |
 
-Configs 3-6 keep at most 1 chunk per page in the top 5 when reranking.
+Configs 3 to 5 keep at most one chunk per page in the top 5.
 
-## Findings
+- With bge-small the cross-encoder helped (hit@5 81 % -> 85 %). With bge-base it made
+  things worse (hit@1 77 % -> 62 %, MRR 0.82 -> 0.75) and was about 150x slower. It
+  tends to rank the big API reference pages (`smeshBuilder.html`, `modules.html`) above
+  the user-guide page that answers the question.
+- recall@20 was already 96 %: most misses were ranking problems, not missing candidates.
+- Reranking 10 candidates instead of 20 gave the same scores for half the time, since
+  every correct page was within the top 9 of the embedding search.
+- Remaining misses are vocabulary gaps: "combine two meshes" vs "Build Compound",
+  "finer mesh on one part" vs "sub-mesh".
 
-- **A stronger embedding model beat reranking.** With bge-small, a cross-encoder
-  reranker helped (hit@5 81 % -> 85 %). With bge-base, the same reranker *hurt*
-  (hit@1 77 % -> 62 %, MRR 0.82 -> 0.75) while being ~150x slower: the generic
-  reranker tends to promote the large API reference pages (`smeshBuilder.html`,
-  `modules.html`) over the user-guide page that actually answers the question.
-- **recall@20 was 96 % from the start**: most failures were ranking problems,
-  not missing candidates - measuring it avoided optimizing the wrong stage.
-- **Reranking 10 candidates instead of 20** kept the same quality at half the cost,
-  because every correct page was already within the top 9 of the embedding search.
-- **Remaining failures** are vocabulary gaps: "combine two meshes" vs the doc's
-  "Build Compound", "finer mesh on one part" vs "sub-mesh".
+Kept: config 6.
 
-## Query rewriting by the LLM (27 questions)
+## 2. Query rewriting (27 questions)
 
-A 27th question was added after a real failure in the app
-("How can I view the interior of a mesh?" -> `clipping.html`).
+A 27th question was added after a wrong answer in the UI
+("How can I view the interior of a mesh?", expected `clipping.html`).
 
-| Config (bge-base, no rerank) | hit@1 | hit@5 | MRR | Time / question |
+| bge-base, no rerank | hit@1 | hit@5 | MRR | Time / question |
 |---|---|---|---|---|
-| Original question only | 74 % | **89 %** | **0.79** | 0.1 s |
-| + rewritten query (qwen2.5:3b), fused with RRF | 74 % | 78 % | 0.76 | 2.7 s |
+| Original question | 74 % | 89 % | 0.79 | 0.1 s |
+| + query rewritten by qwen2.5:3b, merged with RRF | 74 % | 78 % | 0.76 | 2.7 s |
 
-- **Rewriting hurt on English questions**: it fixed none of the failures and broke three.
-  The 3B model does not know SALOME's vocabulary (it rewrote "view the interior" as
-  "internal mesh visualization", not "clipping"), and the first prompt's examples biased
-  it towards API words ("smeshBuilder ... method", even an invented "AddLayer"), which
-  pulled the search towards API reference pages.
-- **Decision**: rewriting is now *automatic*, only for follow-up questions and non-English
-  (e.g. French) questions, where the original wording cannot work. Prompt fixed (no API
-  words in examples, "never invent function names"). The French case still needs its own
-  evaluation set.
+- Rewriting fixed none of the misses and broke three. The 3B model does not know
+  SALOME's vocabulary ("view the interior" became "internal mesh visualization", not
+  "clipping"), and the examples in my first prompt pushed it towards API words, even an
+  invented "AddLayer", which pulled the search towards API reference pages.
+- Rewriting is now only used for follow-up questions and non-English questions. The
+  prompt examples no longer contain API names.
 
-## French questions (27 questions translated, `eval/questions_fr.jsonl`)
+## 3. French questions (27 questions)
 
-The embedding model is English-only and the docs are in English.
-
-| Config (bge-base, no rerank) | hit@1 | hit@5 | MRR | Time / question |
+| bge-base, no rerank | hit@1 | hit@5 | MRR | Time / question |
 |---|---|---|---|---|
 | French question as is | 30 % | 52 % | 0.37 | 0.1 s |
-| French question rewritten in English by qwen2.5:3b (auto mode) | **52 %** | **78 %** | **0.62** | 2.4 s |
-| *(reference: English questions)* | *74 %* | *89 %* | *0.79* | *0.1 s* |
+| Rewritten in English by qwen2.5:3b | 52 % | 78 % | 0.62 | 2.4 s |
+| (English questions, for reference) | 74 % | 89 % | 0.79 | 0.1 s |
 
-- **Rewriting pays off here**: +26 points of hit@5 (7 more questions answered), which
-  justifies the *auto* mode: rewrite French and follow-up questions, not English ones.
-- Without rewriting, French queries are pulled towards the few French pages shipped
-  with SALOME (`usage_outil.html`, `presentation_base.html`), whatever the topic.
-- Remaining gap vs English (78 % vs 89 %) comes from translation slips
-  ("rapport d'aspect" -> "aspect report") and the same vocabulary gaps as in English.
+- Here rewriting helps: +26 points of hit@5.
+- Without it, French questions are drawn to the few French pages shipped with SALOME
+  (`usage_outil.html`, `presentation_base.html`) whatever the topic.
+- The remaining gap with English comes from translation slips ("rapport d'aspect" ->
+  "aspect report") and the same vocabulary gaps.
 
-## Answer quality (`eval_answers.py`, first 8 questions)
+## 4. Answers (`eval_answers.py`, first 8 questions)
 
-Automatic checks on the answers written by the LLM:
-*intro* = starts with a one-sentence answer; *full ex.* = points to the complete example;
-*no invented API* = every function called in the code exists in the SMESH docs.
+Checks on the generated answers: *intro* = starts with a one-sentence answer;
+*full ex.* = points to the complete example; *no invented API* = every function called
+in the code exists somewhere in the docs; *sourced API* = it also appears in the 5
+passages given to the model.
 
-| LLM (CPU) | Intro | Full ex. | No invented API | Sourced API | Time / answer |
+| LLM | Intro | Full ex. | No invented API | Sourced API | Time / answer |
 |---|---|---|---|---|---|
 | qwen2.5:3b | 50 % | 100 % | 75 % | 88 % | 60 s |
-| **qwen2.5:7b (default)** | **100 %** | **100 %** | **100 %** | 88 % | 35 s |
+| qwen2.5:7b | 100 % | 100 % | 100 % | 88 % | 35 s |
 
-*Sourced API* = every function called also appears in the 5 passages given to the model
-(otherwise it comes from the model's own knowledge).
+- On a first run the 3B invented `FaceGroups`, `MergingNodes` (the real one is
+  `MergeNodes`), `FindHole` and `Add`. The 7B invented none.
+- The first version of the check only looked at the 5 passages and flagged the 7B's
+  `MergeNodes`, a real function that just wasn't in them. It now checks the whole docs
+  and reports "not in the passages" separately.
+- Timings depend on the machine load: the 7B took 116 s per answer on a first run and
+  35 s later, after removing needless model reloads between calls (`NUM_CTX` in rag.py).
+- A full example answer in the prompt was copied word for word by the 3B on an
+  unrelated question; the prompt now only contains an empty layout.
 
-- On a first run, the 3B model invented `FaceGroups`, `MergingNodes` (real: `MergeNodes`),
-  `FindHole` and `Add`. The 7B model invented none.
-- The first version of the check only compared names with the 5 passages given to the
-  model and flagged the 7B's `MergeNodes`, a real function that was simply not in those
-  passages. The check now separates *invented* (nowhere in the docs) from *not in the
-  passages* (real but not sourced).
-- Times vary with machine load: the 7B took 116 s/answer on a first run and 35 s on a
-  later one, after fixing needless model reloads between calls (see `rag.py`, NUM_CTX).
-- **Decision**: 7B by default (a wrong function costs more than a 1-minute wait), 3B
-  kept as the fast option and for query rewriting. The app shows a warning under any
-  answer whose code uses a function that exists nowhere in the docs.
-- Lesson learned on the way: a full example answer in the prompt was copied word for
-  word by the 3B model on an unrelated question. The prompt now only contains an empty
-  layout template.
+Kept: qwen2.5:7b for answers, qwen2.5:3b for query rewriting.
 
 ## Caveats
 
-26 questions is small: one question = ~4 points, so differences under ~8 points
-are not conclusive. The set was written by one person who knows the docs.
-
-Chosen default: **config 6** (bge-base-en-v1.5, no reranking).
+These sets are small (one question is about 4 points), so differences of a few points
+are not meaningful. The questions were written by someone who knows the docs.
